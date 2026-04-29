@@ -1,0 +1,4 @@
+{"event": "claude_output", "timestamp": "2026-04-29T09:22:54.070815+00:00", "task_id": "sympy__sympy-11870", "stream": "stderr", "payload": {"raw": "Error: Input must be provided either through stdin or as a prompt argument when using --print"}}
+{"event": "claude_output", "timestamp": "2026-04-29T09:40:43.132778+00:00", "task_id": "sympy__sympy-11870", "stream": "stderr", "payload": {"raw": "Error: Input must be provided either through stdin or as a prompt argument when using --print"}}
+{"event": "claude_output", "timestamp": "2026-04-29T09:41:17.215421+00:00", "task_id": "sympy__sympy-11870", "stream": "stderr", "payload": {"raw": "Error: Input must be provided either through stdin or as a prompt argument when using --print"}}
+{"event": "claude_output", "timestamp": "2026-04-29T09:46:29.439347+00:00", "task_id": "sympy__sympy-11870", "stream": "stderr", "payload": {"raw": "Error: When using --print, --output-format=stream-json requires --verbose"}}

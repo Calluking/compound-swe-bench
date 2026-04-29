@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -27,8 +29,15 @@ def fetch_task(task_id: str) -> dict:
                 "length": str(length),
             }
         )
-        with urllib.request.urlopen(f"{BASE_URL}?{q}", timeout=180) as response:
-            return json.loads(response.read().decode("utf-8"))
+        delays = [1, 2, 4, 8, 16]
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                with urllib.request.urlopen(f"{BASE_URL}?{q}", timeout=180) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt == len(delays):
+                    raise
+                time.sleep(delay)
 
     first = fetch(0, 1)
     total = int(first.get("num_rows_total", 0))
@@ -172,4 +181,3 @@ def fail_to_pass_command(row: dict) -> list[str]:
         labels = [django_label(item) for item in tests]
         return ["python", "tests/runtests.py", *labels]
     return ["python", "-m", "pytest", *tests]
-
