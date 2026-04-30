@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_LOGS_DIR = ROOT / "output_logs"
 PREPARE_TASK = ROOT / "scripts" / "prepare_task.py"
 PRINT_LOCK = threading.Lock()
-RUN_KIND = "parallel"
+RUN_KIND = "same_session"
 
 
 def utc_now() -> str:
@@ -28,6 +28,14 @@ def run_id() -> str:
 def emit(event: dict) -> None:
     with PRINT_LOCK:
         print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
+def write_log(log_path: Path, event: dict) -> None:
+    record = json.dumps(event, ensure_ascii=False)
+    with PRINT_LOCK:
+        print(record, flush=True)
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(record + "\n")
 
 
 def prepare_task(task_id: str) -> dict:
@@ -49,44 +57,79 @@ def prepare_task(task_id: str) -> dict:
     return payload
 
 
-def build_prompt(task_md_path: Path) -> str:
-    return task_md_path.read_text(encoding="utf-8").strip()
+def build_prompt(task_md_path: Path, task_number: int, task_count: int) -> str:
+    task_prompt = task_md_path.read_text(encoding="utf-8").strip()
+    return f"""You are running task {task_number} of {task_count} in a shared Claude session.
+
+Treat this task as independent from earlier tasks in the conversation. Use only the repository checkout and task files named below for this task.
+The Claude process cwd is the benchmark runner root so the session can be resumed across tasks; use the absolute workspace path from the task text when reading, editing, or running commands.
+
+{task_prompt}
+"""
 
 
-def stream_reader(task_id: str, stream_name: str, pipe, log_path: Path) -> None:
-    with log_path.open("a", encoding="utf-8") as log_file:
-        for raw_line in pipe:
-            line = raw_line.rstrip("\n")
-            if not line:
-                continue
+def update_session_id(payload: dict, session: dict[str, str | None]) -> None:
+    if payload.get("is_error"):
+        return
 
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                payload = {"raw": line}
+    session_id = payload.get("session_id")
+    if isinstance(session_id, str) and session_id:
+        session["id"] = session_id
+        return
 
-            event = {
-                "event": "claude_output",
-                "timestamp": utc_now(),
-                "task_id": task_id,
-                "stream": stream_name,
-                "payload": payload,
-            }
-            record = json.dumps(event, ensure_ascii=False)
-            with PRINT_LOCK:
-                print(record, flush=True)
-                log_file.write(record + "\n")
-                log_file.flush()
+    message = payload.get("message")
+    if isinstance(message, dict):
+        session_id = message.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            session["id"] = session_id
 
 
-def run_claude(task_meta: dict, model: str | None, effort: str | None, output_dir: Path) -> int:
+def stream_reader(
+    task_id: str,
+    stream_name: str,
+    pipe,
+    log_path: Path,
+    session: dict[str, str | None],
+) -> None:
+    for raw_line in pipe:
+        line = raw_line.rstrip("\n")
+        if not line:
+            continue
+
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            payload = {"raw": line}
+        else:
+            if stream_name == "stdout":
+                update_session_id(payload, session)
+
+        event = {
+            "event": "claude_output",
+            "timestamp": utc_now(),
+            "task_id": task_id,
+            "stream": stream_name,
+            "payload": payload,
+        }
+        write_log(log_path, event)
+
+
+def run_claude(
+    task_meta: dict,
+    task_number: int,
+    task_count: int,
+    session_id: str | None,
+    model: str | None,
+    effort: str | None,
+    output_dir: Path,
+) -> tuple[int, str | None]:
     task_id = task_meta["task_id"]
     task_md_path = Path(task_meta["task_md"])
     task_dir = task_md_path.parent
     workspace = Path(task_meta["workspace"])
     log_path = output_dir / f"{task_id}.jsonl"
     progress_md_path = task_dir / "progress.md"
-    prompt = build_prompt(task_md_path)
+    prompt = build_prompt(task_md_path, task_number, task_count)
 
     command = [
         "claude",
@@ -98,29 +141,36 @@ def run_claude(task_meta: dict, model: str | None, effort: str | None, output_di
         "bypassPermissions",
         "--dangerously-skip-permissions",
         "--add-dir",
+        str(workspace),
+        "--add-dir",
         str(task_dir),
     ]
+    if session_id:
+        command.extend(["--resume", session_id])
     if model:
         command.extend(["--model", model])
     if effort:
         command.extend(["--effort", effort])
 
-    emit(
-        {
-            "event": "claude_started",
-            "timestamp": utc_now(),
-            "task_id": task_id,
-            "workspace": str(workspace),
-            "task_md": str(task_md_path),
-            "progress_md": str(progress_md_path),
-            "log_path": str(log_path),
-            "command": command,
-        }
-    )
+    start_event = {
+        "event": "claude_started",
+        "timestamp": utc_now(),
+        "task_id": task_id,
+        "task_number": task_number,
+        "task_count": task_count,
+        "workspace": str(workspace),
+        "task_md": str(task_md_path),
+        "progress_md": str(progress_md_path),
+        "log_path": str(log_path),
+        "cwd": str(ROOT),
+        "resume_session_id": session_id,
+        "command": command,
+    }
+    write_log(log_path, start_event)
 
     process = subprocess.Popen(
         command,
-        cwd=str(workspace),
+        cwd=str(ROOT),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -137,14 +187,15 @@ def run_claude(task_meta: dict, model: str | None, effort: str | None, output_di
         process.stdin.write("\n")
     process.stdin.close()
 
+    session: dict[str, str | None] = {"id": session_id}
     stdout_thread = threading.Thread(
         target=stream_reader,
-        args=(task_id, "stdout", process.stdout, log_path),
+        args=(task_id, "stdout", process.stdout, log_path, session),
         daemon=True,
     )
     stderr_thread = threading.Thread(
         target=stream_reader,
-        args=(task_id, "stderr", process.stderr, log_path),
+        args=(task_id, "stderr", process.stderr, log_path, session),
         daemon=True,
     )
     stdout_thread.start()
@@ -154,54 +205,27 @@ def run_claude(task_meta: dict, model: str | None, effort: str | None, output_di
     stdout_thread.join()
     stderr_thread.join()
 
-    emit(
-        {
-            "event": "claude_finished",
-            "timestamp": utc_now(),
-            "task_id": task_id,
-            "return_code": return_code,
-            "progress_md": str(progress_md_path),
-            "log_path": str(log_path),
-        }
-    )
-    return return_code
-
-
-def worker(
-    task_meta: dict,
-    model: str | None,
-    effort: str | None,
-    output_dir: Path,
-    results: dict[str, int],
-) -> None:
-    task_id = task_meta["task_id"]
-    try:
-        results[task_id] = run_claude(
-            task_meta,
-            model=model,
-            effort=effort,
-            output_dir=output_dir,
-        )
-    except Exception as exc:  # pragma: no cover
-        results[task_id] = 1
-        emit(
-            {
-                "event": "task_failed",
-                "timestamp": utc_now(),
-                "task_id": task_id,
-                "error": str(exc),
-            }
-        )
+    finish_event = {
+        "event": "claude_finished",
+        "timestamp": utc_now(),
+        "task_id": task_id,
+        "return_code": return_code,
+        "session_id": session["id"],
+        "progress_md": str(progress_md_path),
+        "log_path": str(log_path),
+    }
+    write_log(log_path, finish_event)
+    return return_code, session["id"]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare 5 SWE-bench tasks and run Claude on all 5 in parallel."
+        description="Prepare 5 SWE-bench tasks and run Claude sequentially in one resumed session."
     )
     parser.add_argument(
         "task_ids",
         nargs=5,
-        help="Exactly 5 SWE-bench task IDs, e.g. sympy__sympy-15345",
+        help="Exactly 5 SWE-bench task IDs, e.g. django__django-10914",
     )
     parser.add_argument(
         "--model",
@@ -231,6 +255,7 @@ def main() -> int:
             "run_kind": RUN_KIND,
             "model": args.model,
             "effort": args.effort,
+            "session_mode": "shared_resume",
         }
     )
 
@@ -263,19 +288,32 @@ def main() -> int:
                 }
             )
 
-    threads = [
-        threading.Thread(
-            target=worker,
-            args=(task_meta, args.model, args.effort, output_dir, results),
-            daemon=True,
-        )
-        for task_meta in prepared_tasks
-    ]
-
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    session_id: str | None = None
+    task_count = len(prepared_tasks)
+    for index, task_meta in enumerate(prepared_tasks, start=1):
+        task_id = task_meta["task_id"]
+        try:
+            return_code, session_id = run_claude(
+                task_meta,
+                task_number=index,
+                task_count=task_count,
+                session_id=session_id,
+                model=args.model,
+                effort=args.effort,
+                output_dir=output_dir,
+            )
+            results[task_id] = return_code
+        except Exception as exc:  # pragma: no cover
+            results[task_id] = 1
+            emit(
+                {
+                    "event": "task_failed",
+                    "timestamp": utc_now(),
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "error": str(exc),
+                }
+            )
 
     exit_code = 0 if all(code == 0 for code in results.values()) else 1
     emit(
@@ -283,6 +321,7 @@ def main() -> int:
             "event": "run_finished",
             "timestamp": utc_now(),
             "results": results,
+            "session_id": session_id,
             "output_logs_dir": str(output_dir),
             "exit_code": exit_code,
         }

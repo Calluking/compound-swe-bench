@@ -1,2 +1,3 @@
 scirpts/__pycache__/
 repo/*
+.venv/*
