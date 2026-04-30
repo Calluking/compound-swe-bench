@@ -196,12 +196,12 @@ def worker(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Prepare 5 SWE-bench tasks and run Claude on all 5 in parallel."
+        description="Prepare SWE-bench tasks and run Claude on all of them in parallel."
     )
     parser.add_argument(
         "task_ids",
-        nargs=5,
-        help="Exactly 5 SWE-bench task IDs, e.g. sympy__sympy-15345",
+        nargs="+",
+        help="One or more SWE-bench task IDs, e.g. sympy__sympy-15345",
     )
     parser.add_argument(
         "--model",
