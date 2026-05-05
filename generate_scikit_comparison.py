@@ -29,7 +29,9 @@ def parse_logs(log_dirs):
                     ts_str = data.get("timestamp")
                     if ts_str:
                         timestamps.append(ts_str)
-                    turn_count += 1
+                    # Count turns as tool execution cycles (number of user tool result events)
+                    if data.get("payload", {}).get("type") == "user":
+                        turn_count += 1
 
             if timestamps:
                 start = datetime.fromisoformat(timestamps[0].replace('+00:00', '+00:00'))
@@ -57,13 +59,12 @@ def main():
     parallel_raw = parse_logs(parallel_dirs)
     same_session_raw = parse_logs([same_session_dir])
 
-    # Aggregate parallel runs (take average across the 3 parallel runs)
+    # Aggregate parallel runs (each task appears in only one directory)
     parallel_metrics = {}
     for task_id, data in parallel_raw.items():
         parallel_metrics[task_id] = {
-            "elapsed_minutes": np.mean(data["times"]),
-            "turns": np.mean(data["turns"]),
-            "times": data["times"]
+            "elapsed_minutes": data["times"][0],
+            "turns": data["turns"][0],
         }
 
     # Same session has one run per task
@@ -105,7 +106,7 @@ def main():
     width = 0.35
 
     ax = axes[0]
-    bars1 = ax.bar(x - width/2, times_parallel, width, label='Parallel (avg of 3 runs)', color='#1f77b4', alpha=0.8)
+    bars1 = ax.bar(x - width/2, times_parallel, width, label='Parallel', color='#1f77b4', alpha=0.8)
     bars2 = ax.bar(x + width/2, times_same, width, label='Same Session', color='#ff7f0e', alpha=0.8)
 
     ax.set_ylabel('Time (minutes)', fontsize=11, fontweight='bold')
@@ -128,7 +129,7 @@ def main():
     turns_same = [same_session_metrics[t]["turns"] for t in task_ids]
 
     ax = axes[1]
-    bars1 = ax.bar(x - width/2, turns_parallel, width, label='Parallel (avg of 3 runs)', color='#1f77b4', alpha=0.8)
+    bars1 = ax.bar(x - width/2, turns_parallel, width, label='Parallel', color='#1f77b4', alpha=0.8)
     bars2 = ax.bar(x + width/2, turns_same, width, label='Same Session', color='#ff7f0e', alpha=0.8)
 
     ax.set_xlabel('Task ID', fontsize=11, fontweight='bold')
@@ -158,7 +159,7 @@ def main():
 
 ![Scikit-learn task run comparison charts](scikit-run-comparison.png)
 
-Comparison of parallel runs (`output_logs/parallel/20260430T030135Z`, `20260430T030901Z`, `20260430T032103Z`) and same-session run (`output_logs/same_session/20260430T063815Z`).
+Comparison of parallel runs (10 tasks across `output_logs/parallel/20260430T030135Z`, `20260430T030901Z`, `20260430T032103Z`) and same-session run (`output_logs/same_session/20260430T063815Z`).
 
 Task order: {', '.join('`' + t.replace('scikit-learn__scikit-learn-', '') + '`' for t in task_ids_sorted[:5])}.
 
