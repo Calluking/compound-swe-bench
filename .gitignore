@@ -1,3 +1,4 @@
-scirpts/__pycache__/
+scripts/__pycache__/
+output_logs/
 repo/*
 .venv/*
