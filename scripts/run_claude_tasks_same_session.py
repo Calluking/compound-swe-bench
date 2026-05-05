@@ -10,6 +10,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from render_claude_stream_jsonl import render_file
+
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_LOGS_DIR = ROOT / "output_logs"
 PREPARE_TASK = ROOT / "scripts" / "prepare_task.py"
@@ -215,6 +217,7 @@ def run_claude(
         "log_path": str(log_path),
     }
     write_log(log_path, finish_event)
+    render_file(log_path)
     return return_code, session["id"]
 
 

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from og_memory_runtime import OGMemoryRuntime
+from render_claude_stream_jsonl import render_file
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH_ROOT = Path(__file__).resolve().parents[1]
@@ -181,6 +182,7 @@ def run_claude(task_meta: dict, model: str | None, effort: str | None, output_di
             "log_path": str(log_path),
         }
     )
+    render_file(log_path)
     return return_code
 
 
