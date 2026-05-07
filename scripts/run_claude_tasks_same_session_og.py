@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from og_memory_runtime import OGMemoryRuntime
+from patch_snapshot import save_patch_snapshot
 from render_claude_stream_jsonl import render_file
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -210,6 +211,15 @@ def run_claude(task_meta: dict, task_number: int, task_count: int, session_id: s
     }
     write_log(log_path, finish_event)
     render_file(log_path)
+    patch_path = save_patch_snapshot(task_id, workspace, output_dir)
+    emit(
+        {
+            "event": "task_patch_saved",
+            "timestamp": utc_now(),
+            "task_id": task_id,
+            "patch_path": str(patch_path),
+        }
+    )
     return return_code, session["id"]
 
 
